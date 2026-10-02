@@ -1,38 +1,63 @@
-#include <Arduino.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdint.h>
 
 // One shared output pin for both LED and buzzer
-constexpr uint8_t BUTTON_PIN = 2;
-constexpr uint8_t SHARED_OUTPUT_PIN = 9;
-constexpr unsigned long DEBOUNCE_DELAY = 30; // ms
+constexpr uint8_t BUTTON_BIT = PD2;
+constexpr uint8_t SHARED_OUTPUT_BIT = PB1;
+constexpr uint32_t DEBOUNCE_DELAY = 30;
 
 bool outputState = false;
-uint8_t stableState = HIGH;
-uint8_t lastReading = HIGH;
-unsigned long lastDebounceTime = 0;
+bool stableState = true;
+bool lastReading = true;
+volatile uint32_t milliseconds = 0;
 
-void setup() {
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(SHARED_OUTPUT_PIN, OUTPUT);
-
-  // Force output OFF on boot
-  digitalWrite(SHARED_OUTPUT_PIN, LOW);
+ISR(TIMER1_COMPA_vect)
+{
+  ++milliseconds;
 }
 
-void loop() {
-  uint8_t reading = digitalRead(BUTTON_PIN);
+uint32_t millis_now()
+{
+  uint32_t value;
+  uint8_t savedStatus = SREG;
+  cli();
+  value = milliseconds;
+  SREG = savedStatus;
+  return value;
+}
+
+void setup()
+{
+  DDRD &= ~(1 << BUTTON_BIT);
+  PORTD |= (1 << BUTTON_BIT);
+  DDRB |= (1 << SHARED_OUTPUT_BIT);
+  PORTB &= ~(1 << SHARED_OUTPUT_BIT);
+
+  TCCR1A = 0;
+  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);
+  OCR1A = 249;
+  TIMSK1 = (1 << OCIE1A);
+  sei();
+}
+
+void loop()
+{
+  static uint32_t lastDebounceTime = 0;
+  bool reading = (PIND & (1 << BUTTON_BIT)) != 0;
 
   if (reading != lastReading) {
-    lastDebounceTime = millis();
+    lastDebounceTime = millis_now();
   }
 
-  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+  if ((millis_now() - lastDebounceTime) > DEBOUNCE_DELAY) {
     if (reading != stableState) {
       stableState = reading;
 
-      // Active-LOW button because INPUT_PULLUP is used
-      if (stableState == LOW) {
+      if (!stableState) {
         outputState = !outputState;
-        digitalWrite(SHARED_OUTPUT_PIN, outputState ? HIGH : LOW);
+        if (outputState) PORTB |= (1 << SHARED_OUTPUT_BIT);
+        else PORTB &= ~(1 << SHARED_OUTPUT_BIT);
       }
     }
   }
